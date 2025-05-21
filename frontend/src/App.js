@@ -22,6 +22,19 @@ function App() {
   // Contract address - replace with your deployed contract address
   const contractAddress = "0x5FbDB2315678afecb367f032d93F642f64180aa3";
 
+  // Refresh balance
+  const refreshBalance = async () => {
+    try {
+      if (contract && account) {
+        const balance = await contract.getBalance(account);
+        setBalance(ethers.formatEther(balance));
+      }
+    } catch (err) {
+      console.error('Error fetching balance:', err);
+      setError('Failed to fetch account balance');
+    }
+  };
+
   // Connect to wallet
   const connectWallet = async () => {
     setError('');
@@ -52,18 +65,30 @@ function App() {
       );
       setContract(contract);
       
-      // Check if account exists
-      const hasAccount = await contract.accountExist(account);
-      setAccountExists(hasAccount);
-      
-      if (hasAccount) {
-        // Get account balance
-        await refreshBalance();
+      // Check if account exists - FIX: Handle the call properly with try/catch
+      try {
+        const hasAccount = await contract.accountExist(account);
+        setAccountExists(hasAccount);
+        
+        if (hasAccount) {
+          // Get account balance
+          await refreshBalance();
+        }
+      } catch (accountErr) {
+        console.error('Error checking if account exists:', accountErr);
+        // If it's a decoding error, it's likely because the account doesn't exist
+        setAccountExists(false);
+        setBalance('0');
       }
       
-      // Get total accounts
-      const totalAccounts = await contract.getTotalAccounts();
-      setTotalAccounts(Number(totalAccounts));
+      // Get total accounts - FIX: Handle potential error
+      try {
+        const totalAccounts = await contract.getTotalAccounts();
+        setTotalAccounts(Number(totalAccounts));
+      } catch (countErr) {
+        console.error('Error getting total accounts:', countErr);
+        setTotalAccounts(0);
+      }
       
       setIsConnected(true);
       setSuccessMessage('Wallet connected successfully!');
@@ -93,12 +118,18 @@ function App() {
       setAccount(account);
       
       if (contract) {
-        const hasAccount = await contract.accountExist(account);
-        setAccountExists(hasAccount);
-        
-        if (hasAccount) {
-          await refreshBalance();
-        } else {
+        try {
+          const hasAccount = await contract.accountExist(account);
+          setAccountExists(hasAccount);
+          
+          if (hasAccount) {
+            await refreshBalance();
+          } else {
+            setBalance('0');
+          }
+        } catch (err) {
+          console.error('Error checking account after change:', err);
+          setAccountExists(false);
           setBalance('0');
         }
       }
@@ -119,7 +150,7 @@ function App() {
     setSuccessMessage('');
   };
 
-  // Create bank account
+  // Create a new account
   const createAccount = async () => {
     setError('');
     setSuccessMessage('');
@@ -136,16 +167,19 @@ function App() {
       const totalAccounts = await contract.getTotalAccounts();
       setTotalAccounts(Number(totalAccounts));
       
+      // Refresh balance
+      await refreshBalance();
     } catch (err) {
       console.error('Error creating account:', err);
-      setError(err.message || 'Error creating account');
+      setError(err.message || 'Failed to create account');
     } finally {
       setLoading(false);
     }
   };
 
   // Deposit funds
-  const deposit = async () => {
+  const deposit = async (e) => {
+    e.preventDefault();
     setError('');
     setSuccessMessage('');
     setLoading(true);
@@ -155,24 +189,26 @@ function App() {
         throw new Error('Please enter a valid deposit amount');
       }
       
-      const amountInWei = ethers.parseEther(depositAmount);
-      const tx = await contract.deposit({ value: amountInWei });
+      const amount = ethers.parseEther(depositAmount);
+      const tx = await contract.deposit({ value: amount });
       await tx.wait();
       
-      await refreshBalance();
-      setDepositAmount('');
       setSuccessMessage(`Successfully deposited ${depositAmount} ETH!`);
+      setDepositAmount('');
       
+      // Refresh balance
+      await refreshBalance();
     } catch (err) {
       console.error('Error depositing funds:', err);
-      setError(err.message || 'Error depositing funds');
+      setError(err.message || 'Failed to deposit funds');
     } finally {
       setLoading(false);
     }
   };
 
   // Withdraw funds
-  const withdraw = async () => {
+  const withdraw = async (e) => {
+    e.preventDefault();
     setError('');
     setSuccessMessage('');
     setLoading(true);
@@ -182,137 +218,95 @@ function App() {
         throw new Error('Please enter a valid withdrawal amount');
       }
       
-      const amountInWei = ethers.parseEther(withdrawAmount);
-      const tx = await contract.withdraw(amountInWei);
+      if (parseFloat(withdrawAmount) > parseFloat(balance)) {
+        throw new Error('Insufficient balance');
+      }
+      
+      const amount = ethers.parseEther(withdrawAmount);
+      const tx = await contract.withdraw(amount);
       await tx.wait();
       
-      await refreshBalance();
-      setWithdrawAmount('');
       setSuccessMessage(`Successfully withdrew ${withdrawAmount} ETH!`);
+      setWithdrawAmount('');
       
+      // Refresh balance
+      await refreshBalance();
     } catch (err) {
       console.error('Error withdrawing funds:', err);
-      setError(err.message || 'Error withdrawing funds');
+      setError(err.message || 'Failed to withdraw funds');
     } finally {
       setLoading(false);
     }
   };
 
-  // Refresh account balance
-  const refreshBalance = async () => {
-    try {
-      if (contract && account && accountExists) {
-        const balanceWei = await contract.checkBalance();
-        const balanceEth = ethers.formatEther(balanceWei);
-        setBalance(balanceEth);
-      }
-    } catch (err) {
-      console.error('Error refreshing balance:', err);
-    }
-  };
-
-  // Auto-connect on initial load
-  useEffect(() => {
-    if (window.ethereum) {
-      connectWallet();
-    }
-    
-    return () => {
-      // Clean up event listeners
-      if (window.ethereum) {
-        window.ethereum.removeListener('accountsChanged', handleAccountsChanged);
-      }
-    };
-  }, []);
-
-  // UI display
+  // Render
   return (
-    <div className="app-container">
-      <header>
-        <h1>Simple Bank DApp</h1>
+    <div className="App">
+      <header className="App-header">
+        <h1>Simple Bank dApp</h1>
         {!isConnected ? (
           <button onClick={connectWallet} disabled={loading}>
             {loading ? 'Connecting...' : 'Connect Wallet'}
           </button>
         ) : (
           <div className="account-info">
-            <p>Connected Account: {account ? `${account.substring(0, 6)}...${account.substring(account.length - 4)}` : ''}</p>
-          </div>
-        )}
-      </header>
-      
-      {error && <div className="error-message">{error}</div>}
-      {successMessage && <div className="success-message">{successMessage}</div>}
-      
-      {isConnected && (
-        <div className="bank-container">
-          <div className="info-section">
-            <h2>Bank Information</h2>
-            <p>Total Accounts: {totalAccounts}</p>
-            {!accountExists ? (
-              <div className="create-account">
+            <p>Connected Account: {account.substring(0, 6)}...{account.substring(account.length - 4)}</p>
+            
+            {accountExists ? (
+              <div className="account-details">
+                <h2>Your Account</h2>
+                <p>Balance: {balance} ETH</p>
+                
+                <div className="actions">
+                  <div className="action-card">
+                    <h3>Deposit</h3>
+                    <form onSubmit={deposit}>
+                      <input
+                        type="text"
+                        placeholder="Amount (ETH)"
+                        value={depositAmount}
+                        onChange={(e) => setDepositAmount(e.target.value)}
+                      />
+                      <button type="submit" disabled={loading}>
+                        {loading ? 'Processing...' : 'Deposit'}
+                      </button>
+                    </form>
+                  </div>
+                  
+                  <div className="action-card">
+                    <h3>Withdraw</h3>
+                    <form onSubmit={withdraw}>
+                      <input
+                        type="text"
+                        placeholder="Amount (ETH)"
+                        value={withdrawAmount}
+                        onChange={(e) => setWithdrawAmount(e.target.value)}
+                      />
+                      <button type="submit" disabled={loading}>
+                        {loading ? 'Processing...' : 'Withdraw'}
+                      </button>
+                    </form>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="no-account">
                 <p>You don't have an account yet.</p>
                 <button onClick={createAccount} disabled={loading}>
                   {loading ? 'Creating...' : 'Create Account'}
                 </button>
               </div>
-            ) : (
-              <div className="account-details">
-                <h3>Your Account</h3>
-                <div className="balance-section">
-                  <p>Balance: {balance} ETH</p>
-                  <button onClick={refreshBalance} className="refresh-button">
-                    Refresh
-                  </button>
-                </div>
-                
-                <div className="transaction-section">
-                  <div className="transaction-form">
-                    <h4>Deposit</h4>
-                    <div className="input-group">
-                      <input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        value={depositAmount}
-                        onChange={(e) => setDepositAmount(e.target.value)}
-                        placeholder="ETH Amount"
-                      />
-                      <button onClick={deposit} disabled={loading || !depositAmount}>
-                        {loading ? 'Processing...' : 'Deposit'}
-                      </button>
-                    </div>
-                  </div>
-                  
-                  <div className="transaction-form">
-                    <h4>Withdraw</h4>
-                    <div className="input-group">
-                      <input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        value={withdrawAmount}
-                        onChange={(e) => setWithdrawAmount(e.target.value)}
-                        placeholder="ETH Amount"
-                      />
-                      <button onClick={withdraw} disabled={loading || !withdrawAmount}>
-                        {loading ? 'Processing...' : 'Withdraw'}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
             )}
+            
+            <div className="bank-stats">
+              <p>Total Accounts: {totalAccounts}</p>
+            </div>
           </div>
-        </div>
-      )}
-      
-      {!isConnected && !loading && (
-        <div className="welcome-message">
-          <h2>Welcome to Simple Bank DApp</h2>
-          <p>Connect your MetaMask wallet to get started.</p>
-        </div>
-      )}
+        )}
+        
+        {error && <div className="error-message">{error}</div>}
+        {successMessage && <div className="success-message">{successMessage}</div>}
+      </header>
     </div>
   );
 }
